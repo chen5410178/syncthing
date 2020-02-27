@@ -7,6 +7,7 @@
 package syncthing
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -179,7 +180,7 @@ func (a *App) startup() error {
 		}()
 	}
 
-	perf := ur.CpuBench(3, 150*time.Millisecond, true)
+	perf := ur.CpuBench(context.Background(), 3, 150*time.Millisecond, true)
 	l.Infof("Hashing performance is %.02f MB/s", perf)
 
 	if err := db.UpdateSchema(a.ll); err != nil {
@@ -404,6 +405,7 @@ func (a *App) stopWithErr(stopReason ExitStatus, err error) ExitStatus {
 		a.err = err
 		close(a.stop)
 	})
+	<-a.stopped
 	return a.exitStatus
 }
 

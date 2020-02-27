@@ -187,6 +187,15 @@ func (s *service) getListener(guiCfg config.GUIConfiguration) (net.Listener, err
 		return nil, err
 	}
 
+	if guiCfg.Network() == "unix" && guiCfg.UnixSocketPermissions() != 0 {
+		// We should error if this fails under the assumption that these permissions are
+		// required for operation.
+		err = os.Chmod(guiCfg.Address(), guiCfg.UnixSocketPermissions())
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	listener := &tlsutil.DowngradingListener{
 		Listener:  rawListener,
 		TLSConfig: tlsCfg,
@@ -743,15 +752,18 @@ func (s *service) getDBRemoteNeed(w http.ResponseWriter, r *http.Request) {
 
 	page, perpage := getPagingParams(qs)
 
-	if files, err := s.model.RemoteNeedFolderFiles(deviceID, folder, page, perpage); err != nil {
+	snap, err := s.model.DBSnapshot(folder)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
-	} else {
-		sendJSON(w, map[string]interface{}{
-			"files":   toJsonFileInfoSlice(files),
-			"page":    page,
-			"perpage": perpage,
-		})
+		return
 	}
+	defer snap.Release()
+	files := snap.RemoteNeedFolderFiles(deviceID, page, perpage)
+	sendJSON(w, map[string]interface{}{
+		"files":   toJsonFileInfoSlice(files),
+		"page":    page,
+		"perpage": perpage,
+	})
 }
 
 func (s *service) getDBLocalChanged(w http.ResponseWriter, r *http.Request) {
@@ -761,7 +773,13 @@ func (s *service) getDBLocalChanged(w http.ResponseWriter, r *http.Request) {
 
 	page, perpage := getPagingParams(qs)
 
-	files := s.model.LocalChangedFiles(folder, page, perpage)
+	snap, err := s.model.DBSnapshot(folder)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	defer snap.Release()
+	files := snap.LocalChangedFiles(page, perpage)
 
 	sendJSON(w, map[string]interface{}{
 		"files":   toJsonFileInfoSlice(files),
@@ -1048,7 +1066,7 @@ func (s *service) getSupportBundle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Report Data as a JSON
-	if usageReportingData, err := json.MarshalIndent(s.urService.ReportData(), "", "  "); err != nil {
+	if usageReportingData, err := json.MarshalIndent(s.urService.ReportData(context.TODO()), "", "  "); err != nil {
 		l.Warnln("Support bundle: failed to create versionPlatform.json:", err)
 	} else {
 		files = append(files, fileEntry{name: "usage-reporting.json.txt", data: usageReportingData})
@@ -1133,7 +1151,7 @@ func (s *service) getReport(w http.ResponseWriter, r *http.Request) {
 	if val, _ := strconv.Atoi(r.URL.Query().Get("version")); val > 0 {
 		version = val
 	}
-	sendJSON(w, s.urService.ReportDataPreview(version))
+	sendJSON(w, s.urService.ReportDataPreview(context.TODO(), version))
 }
 
 func (s *service) getRandomString(w http.ResponseWriter, r *http.Request) {
